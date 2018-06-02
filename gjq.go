@@ -28,7 +28,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	filter, err := makeFilter(args[0])
+	filter, err := makeFilter(args[0], 0)
 	if err != nil {
 		log.Printf("Can't understand filter arguments: %s\n", err)
 		os.Exit(1)
@@ -43,6 +43,9 @@ func main() {
 		v := reflect.New(filter.typeof())
 		err := dec.Decode(v.Interface())
 		if err != nil {
+			if err == io.EOF {
+				os.Exit(0)
+			}
 			log.Printf("Can't decode record %d of input: %s\n", rec_num, err)
 			os.Exit(1)
 		}
@@ -56,35 +59,35 @@ type filter interface {
 	typeof() reflect.Type
 }
 
-func makeFilter(arg string) (filter, error) {
+func makeFilter(arg string, pos int) (filter, error) {
 	// parse the filter string
 	// we don't handle the entire world. We handle
 	//   .X    ... extract element X from a dict
 	//   []    ... extract all elements of an array
 	// and for this 1st pass, this is all. I'll add more as I need them
 
-	if len(arg) == 0 {
-		return nil, fmt.Errorf("can't parse filter %q: expected an element, found \"\"", arg)
+	if len(arg) == pos {
+		return nil, fmt.Errorf("can't parse filter %q: expected an element, found the end", arg)
 	}
 
-	switch arg[0] {
+	switch arg[pos] {
 	default:
-		return nil, fmt.Errorf("can't parse filter %q: unknown operator '%c'", arg, arg[0])
+		return nil, fmt.Errorf("can't parse filter %q at index %d: unknown operator '%c'", arg, pos, arg[pos])
 	case '.':
 		var field string
 		var err error
-		field, arg, err = extractFieldName(arg[1:])
+		field, pos, err = extractFieldName(arg, pos+1)
 		if err != nil {
 			return nil, err
 		}
 
 		var field_type reflect.Type
 		var f filter
-		if arg != "" {
+		if len(arg) == pos {
 			// this is the innermost field
 			field_type = reflect.TypeOf(json.RawMessage{})
 		} else {
-			f, err = makeFilter(arg)
+			f, err = makeFilter(arg, pos)
 			if err != nil {
 				return nil, err
 			}
@@ -106,12 +109,12 @@ func makeFilter(arg string) (filter, error) {
 		}, nil
 
 	case '[':
-		if len(arg) < 2 || arg[1] != ']' {
-			return nil, fmt.Errorf("can't parse filter %q: expected ']' after '['", arg)
+		if len(arg) < pos+2 || arg[pos+1] != ']' {
+			return nil, fmt.Errorf("can't parse filter %q at index %d: expected ']' after '['", arg, pos)
 		}
-		arg = arg[2:]
+		pos += 2
 
-		f, err := makeFilter(arg)
+		f, err := makeFilter(arg, pos)
 		if err != nil {
 			return nil, err
 		}
@@ -125,22 +128,22 @@ func makeFilter(arg string) (filter, error) {
 	return nil, nil
 }
 
-func extractFieldName(arg string) (field string, remaining_arg string, err error) {
+func extractFieldName(arg string, pos int) (field string, remaining_pos int, err error) {
 	// scan forward until we find a non-field char
-	for i, c := range arg {
+	for i, c := range arg[pos:] {
 		switch {
 		case 'a' <= c && c <= 'z', '0' <= c && c <= '9', 'A' <= c && c <= 'Z', c == '_':
 			// great, keep accumulating
 		default:
 			// end of field name
 			if i == 0 {
-				return "", arg, fmt.Errorf("Expacted field name, found %q", arg)
+				return "", pos, fmt.Errorf("Expacted field name at %q index %d, found %q ", arg, pos, arg[pos:])
 			}
-			return arg[:i], arg[i:], nil
+			return arg[pos : pos+i], pos + i, nil
 		}
 	}
 	// the entire arg is the field name
-	return arg, "", nil
+	return arg[pos:], len(arg), nil
 }
 
 type array struct {
