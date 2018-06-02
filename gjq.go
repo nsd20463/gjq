@@ -19,12 +19,18 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"runtime"
 	"runtime/pprof"
 	"strings"
+
+	"github.com/pkg/errors"
 )
+
+const debug = false
 
 func main() {
 	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+	var stdlib = flag.Bool("stdlib", false, "use stdlib encoding/json")
 
 	flag.Parse()
 
@@ -49,34 +55,53 @@ func main() {
 		os.Exit(1)
 	}
 
-	out := io.Writer(os.Stdout)
-	in := io.Reader(os.Stdin)
-	dec := json.NewDecoder(in)
-	rec_num := 0
-	for {
-		rec_num++
-		v := reflect.New(filter.typeof())
-		err := dec.Decode(v.Interface())
-		if err != nil {
-			if err == io.EOF {
-				return
+	if *stdlib {
+		// filter using the stdlib
+		out := io.Writer(os.Stdout)
+		in := io.Reader(os.Stdin)
+		dec := json.NewDecoder(in)
+		rec_num := 0
+		for {
+			rec_num++
+			v := reflect.New(filter.typeof())
+			err := dec.Decode(v.Interface())
+			if err != nil {
+				if err == io.EOF {
+					return
+				}
+				log.Printf("Can't decode record %d of input: %+v\n", rec_num, err)
+				os.Exit(1)
 			}
-			log.Printf("Can't decode record %d of input: %s\n", rec_num, err)
-			os.Exit(1)
-		}
 
-		filter.filter(v.Elem(), out)
+			filter.filter(v.Elem(), out)
+		}
+	} else {
+		// filter using our poorly-written scanner code
+		out := io.Writer(os.Stdout)
+		in := newReader(os.Stdin, 1024*1024)
+		rec_num := 0
+		for {
+			rec_num++
+			err := filter.scan(in, out)
+			if err != nil {
+				if err == io.EOF {
+					return
+				}
+				log.Printf("Can't decode record %d of input: %+v\n", rec_num, err)
+				os.Exit(1)
+			}
+		}
 	}
 }
 
 // ------------------------------------------------------------------------------------------------------------
-// decoer of arbitrary JSON objects based on constructing a type with reflection, unmarshaling into an instance
+// decoder of arbitrary JSON objects based on constructing a type with reflection, unmarshaling into an instance
 // of that type, and walking down into the instance and printing out what we find.
 
 type filter interface {
 	filter(reflect.Value, io.Writer) error
 	typeof() reflect.Type
-	scan(*bufio.Reader, io.Writer) error
+	scan(*reader, io.Writer) error
 }
 
 func makeFilter(arg string, pos int) (filter, error) {
@@ -87,12 +112,12 @@ func makeFilter(arg string, pos int) (filter, error) {
 	// and for this 1st pass, this is all. I'll add more as I need them
 
 	if len(arg) == pos {
-		return nil, fmt.Errorf("can't parse %q: expected an element, found the end", arg)
+		return nil, errors.Errorf("can't parse %q: expected an element, found the end", arg)
 	}
 
 	switch arg[pos] {
 	default:
-		return nil, fmt.Errorf("can't parse %q at index %d: unknown operator '%c'", arg, pos, arg[pos])
+		return nil, errors.Errorf("can't parse %q at index %d: unknown operator '%c'", arg, pos, arg[pos])
 	case '.':
 		var field string
 		var err error
@@ -131,7 +156,7 @@ func makeFilter(arg string, pos int) (filter, error) {
 
 	case '[':
 		if len(arg) < pos+2 || arg[pos+1] != ']' {
-			return nil, fmt.Errorf("can't parse %q at index %d: expected ']' after '['", arg, pos)
+			return nil, errors.Errorf("can't parse %q at index %d: expected ']' after '['", arg, pos)
 		}
 		pos += 2
 
@@ -145,8 +170,6 @@ func makeFilter(arg string, pos int) (filter, error) {
 			f: f,
 		}, nil
 	}
-
-	return nil, nil
 }
 
 func extractFieldName(arg string, pos int) (field string, remaining_pos int, err error) {
@@ -158,7 +181,7 @@ func extractFieldName(arg string, pos int) (field string, remaining_pos int, err
 		default:
 			// end of field name
 			if i == 0 {
-				return "", pos, fmt.Errorf("Expacted field name at %q index %d, found %q ", arg, pos, arg[pos:])
+				return "", pos, errors.Errorf("Expacted field name at %q index %d, found %q ", arg, pos, arg[pos:])
 			}
 			return arg[pos : pos+i], pos + i, nil
 		}
@@ -205,33 +228,48 @@ func (d *dict) filter(in reflect.Value, out io.Writer) error {
 // ------------------------------------------------------------------------
 // arbitrary JSON decoder based on a custom JSON scanner which is optimized for skipping the unwanted fields
 
-func (a *array) scan(in *bufio.Reader, out io.Writer) error {
+func (a *array) scan(in *reader, out io.Writer) error {
+	var c byte
 	var err error
-	if err = scanWhitespaceToChar(in, '['); err != nil {
+	if c, err = scanPastWhitespace(in); err != nil {
 		return err
+	} else if c == 'n' {
+		// null?
+		c, err = in.ReadByte()
+		if err != nil {
+			return err
+		}
+		if c != 'u' {
+			return errors.Errorf("at %d expected null, found %c", in.pos, c)
+		}
+
+		c, err = in.ReadByte()
+		if err != nil {
+			return err
+		}
+		if c != 'l' {
+			return errors.Errorf("at %d expected null, found %c", in.pos, c)
+		}
+
+		c, err = in.ReadByte()
+		if err != nil {
+			return err
+		}
+		if c != 'l' {
+			return errors.Errorf("at %d expected null, found %c", in.pos, c)
+		}
+
+		// array has value 'null'
+		return nil
+	} else if c != '[' {
+		return errors.Errorf("at %d expected '[', found %c", in.pos, c)
 	}
 
 	// scan the 1st element, or ']' if this is an empty list
-	var c byte
 	if c, err = scanPastWhitespace(in); err != nil {
 		return err
 	} else if c == ']' {
 		return nil
-	} else if c == 'n' {
-		// null?
-		var n int
-		var null [4]byte
-
-		if n, err = in.Read(null[1:]); n == 3 && null[1] == 'u' && null[2] == 'l' && null[3] == 'l' {
-			// assume it's null
-			// TODO check the next char isn't a letter/it isn't some other word. We'll fail later anyway
-			return err
-		} else if err != nil {
-			return err
-		} else {
-			null[0] = 'n'
-			return fmt.Errorf("expected null, found %q", null)
-		}
 	} else {
 		// this is the 1st byte of the array element; put it back
 		in.UnreadByte()
@@ -244,19 +282,20 @@ func (a *array) scan(in *bufio.Reader, out io.Writer) error {
 		}
 
 		if c, err = scanPastWhitespace(in); c == ',' {
-			continue
+			// ok, continue to the next element
 		} else if c == ']' {
 			return nil
 		} else if err != nil {
 			return err
 		} else {
-			return fmt.Errorf("expected ',' or ']'; found %c", c)
+			return errors.Errorf("at %d expected ',' or ']'; found %c", in.pos, c)
 		}
 	}
 }
 
-func (d *dict) scan(in *bufio.Reader, out io.Writer) error {
+func (d *dict) scan(in *reader, out io.Writer) error {
 	// find the '{'
+	var c byte
 	var err error
 	if err = scanWhitespaceToChar(in, '{'); err != nil {
 		return err
@@ -311,20 +350,28 @@ func (d *dict) scan(in *bufio.Reader, out io.Writer) error {
 				}
 			}
 		}
-	}
 
-	return nil
+		if c, err = scanPastWhitespace(in); c == ',' {
+			// continue to next name:value
+		} else if c == '}' {
+			return nil
+		} else if err != nil {
+			return err
+		} else {
+			return errors.Errorf("at %d expected ',' or '}'; found %c", in.pos, c)
+		}
+	}
 }
 
 // scan forward over whitespace until we find 'c', and stop
-func scanWhitespaceToChar(in *bufio.Reader, c byte) error {
+func scanWhitespaceToChar(in *reader, c byte) error {
 	data, err := in.ReadSlice(c)
 	if err == nil || (len(data) != 0 && data[len(data)-1] == c) {
 		if len(data) > 1 {
 			// verify that data[:len-1] contains only whitespace
 			for _, x := range data[:len(data)-1] {
 				if !isWhitespace(x) {
-					return fmt.Errorf("expected %c, found %c", c, x)
+					return errors.Errorf("at %d expected '%c', found '%c'", in.pos, c, x)
 				}
 			}
 		}
@@ -334,7 +381,7 @@ func scanWhitespaceToChar(in *bufio.Reader, c byte) error {
 }
 
 // scan forward over whitespace; return the first non-whitespace char
-func scanPastWhitespace(in *bufio.Reader) (c byte, err error) {
+func scanPastWhitespace(in *reader) (c byte, err error) {
 	for {
 		c, err = in.ReadByte()
 		if err != nil {
@@ -351,7 +398,7 @@ func isWhitespace(c byte) bool {
 }
 
 // scan a string. the opening '"' has been read
-func scanString(in *bufio.Reader) (string, error) {
+func scanString(in *reader) (string, error) {
 	// TODO unicode!
 	data, err := in.ReadSlice('"')
 	if err == nil && len(data) > 1 && data[len(data)-2] != '\\' {
@@ -421,11 +468,275 @@ func unescapeString(data []byte) string {
 }
 
 // skip the next value
-func skipValue(in *bufio.Reader) error {
-	return nil
+func skipValue(in *reader) error {
+	c, err := scanPastWhitespace(in)
+	if err != nil {
+		return err
+	}
+
+	switch c {
+	case '{':
+		// skip name:values until the closing '}'
+		first := true
+		for {
+			c, err := scanPastWhitespace(in)
+			if err != nil {
+				return err
+			}
+			if c == '}' {
+				return nil
+			}
+			if c == ',' {
+				if first {
+					return errors.Errorf("at %d expected a value, found '%c'", in.pos, c)
+				}
+			} else {
+				in.UnreadByte()
+			}
+			first = false
+			err = skipValue(in) // value ought to be a string, but we don't bother to check
+			if err != nil {
+				return err
+			}
+			c, err = scanPastWhitespace(in)
+			if err != nil {
+				return err
+			}
+			if c != ':' {
+				return errors.Errorf("at %d expected ':', found '%c'", in.pos, c)
+			}
+			err = skipValue(in)
+			if err != nil {
+				return err
+			}
+		}
+
+	case '[':
+		// skip values until the closing ']'
+		first := true
+		for {
+			c, err := scanPastWhitespace(in)
+			if err != nil {
+				return err
+			}
+			if c == ']' {
+				return nil
+			}
+			if c == ',' {
+				if first {
+					return errors.Errorf("at %d expected a value, found '%c'", in.pos, c)
+				}
+			} else {
+				in.UnreadByte()
+			}
+			first = false
+			err = skipValue(in)
+			if err != nil {
+				return err
+			}
+		}
+
+	case '"':
+		// skip until the closing '""
+		esc := false
+		for {
+			// TODO see if ReadSlice('"') isn't faster
+			c, err = in.ReadByte()
+			if err != nil {
+				return err
+			}
+			if c == '\\' {
+				esc = !esc
+			} else {
+				esc = false
+			}
+			if c == '"' && !esc {
+				return nil
+			}
+		}
+
+	default:
+		// anything else is either a number or a keyword. we just skip until we find the first non-number/keyword char
+		for {
+			c, err = in.ReadByte()
+			if err != nil {
+				return err
+			}
+			switch {
+			case 'a' <= c && c <= 'z', '0' <= c && c <= '9', 'A' <= c && c <= 'Z', c == '_', c == '+', c == '-', c == '.':
+				continue
+			default:
+				in.UnreadByte()
+				return nil
+			}
+		}
+	}
 }
 
 // scan and return the next value
-func scanValue(in *bufio.Reader) ([]byte, error) {
-	return nil, nil
+func scanValue(in *reader) ([]byte, error) {
+	var value, v []byte
+	c, err := scanPastWhitespace(in)
+	if err != nil {
+		return value, err
+	}
+	value = append(value, c)
+
+	switch c {
+	case '{':
+		// scan name:values until the closing '}'
+		first := true
+		for {
+			c, err := scanPastWhitespace(in)
+			if err != nil {
+				return value, err
+			}
+			value = append(value, c)
+			if c == '}' {
+				return value, nil
+			}
+			if c == ',' {
+				if first {
+					return value, errors.Errorf("at %d expected a value, found '%c'", in.pos, c)
+				}
+			} else {
+				in.UnreadByte()
+			}
+			first = false
+			v, err = scanValue(in) // value better be a string, but we don't care
+			value = append(value, v...)
+			if err != nil {
+				return value, err
+			}
+			c, err = scanPastWhitespace(in)
+			if err != nil {
+				return value, err
+			}
+			value = append(value, c)
+			if c != ':' {
+				return value, errors.Errorf("at %d expected ':', found '%c'", in.pos, c)
+			}
+			v, err = scanValue(in)
+			value = append(value, v...)
+			if err != nil {
+				return value, err
+			}
+		}
+
+	case '[':
+		// scan values until the closing ']'
+		first := true
+		for {
+			c, err := scanPastWhitespace(in)
+			if err != nil {
+				return value, err
+			}
+			value = append(value, c)
+			if c == ']' {
+				return value, nil
+			}
+			if c == ',' {
+				if first {
+					return value, errors.Errorf("at %d expected a value, found '%c'", in.pos, c)
+				}
+			} else {
+				in.UnreadByte()
+			}
+			first = false
+			v, err = scanValue(in)
+			value = append(value, v...)
+			if err != nil {
+				return value, err
+			}
+		}
+
+	case '"':
+		// scan until the closing '""
+		esc := false
+		for {
+			c, err = in.ReadByte()
+			if err != nil {
+				return value, err
+			}
+			value = append(value, c)
+			if c == '\\' {
+				esc = !esc
+			} else {
+				esc = false
+			}
+			if c == '"' && !esc {
+				return value, nil
+			}
+		}
+
+	default:
+		// anything else is either a number or a keyword. we just scan until we find the first non-number/keyword char
+		for {
+			c, err = in.ReadByte()
+			if err != nil {
+				return value, err
+			}
+			switch {
+			case 'a' <= c && c <= 'z', '0' <= c && c <= '9', 'A' <= c && c <= 'Z', c == '_', c == '+', c == '-', c == '.':
+				value = append(value, c)
+				continue
+			default:
+				in.UnreadByte()
+				return value, nil
+			}
+		}
+	}
+}
+
+// ------------------------------------------------------------------------------------------------------
+// a wrapper around bufio.Reader which counts the bytes read, so we can report where in the input we were when an error happened
+type reader struct {
+	r   *bufio.Reader
+	pos int
+}
+
+func newReader(in io.Reader, size int) *reader {
+	return &reader{
+		r:   bufio.NewReaderSize(in, size),
+		pos: 0,
+	}
+}
+
+func (r *reader) ReadByte() (byte, error) {
+	c, err := r.r.ReadByte()
+	if err == nil {
+		if debug {
+			_, _, line1, _ := runtime.Caller(1)
+			_, _, line2, _ := runtime.Caller(2)
+			log.Printf("%d:%d ReadByte() -> %c", line1, line2, c)
+		}
+		r.pos++
+	}
+	return c, err
+}
+
+func (r *reader) UnreadByte() error {
+	err := r.r.UnreadByte()
+	if err == nil {
+		if debug {
+			_, _, line1, _ := runtime.Caller(1)
+			_, _, line2, _ := runtime.Caller(2)
+			log.Printf("%d:%d UnreadByte()", line1, line2)
+		}
+		r.pos--
+	}
+	return err
+}
+
+func (r *reader) ReadSlice(delim byte) ([]byte, error) {
+	d, err := r.r.ReadSlice(delim)
+	r.pos += len(d)
+	if err == nil {
+		if debug {
+			_, _, line1, _ := runtime.Caller(1)
+			_, _, line2, _ := runtime.Caller(2)
+			log.Printf("%d:%d ReadSlice() -> [%d] %q", line1, line2, len(d), d)
+		}
+	}
+	return d, err
 }
