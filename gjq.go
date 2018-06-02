@@ -17,11 +17,24 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"runtime/pprof"
 	"strings"
 )
 
 func main() {
+	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+
 	flag.Parse()
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
+
 	args := flag.Args()
 	if len(args) != 1 {
 		log.Printf("1 filter argument required")
@@ -44,7 +57,7 @@ func main() {
 		err := dec.Decode(v.Interface())
 		if err != nil {
 			if err == io.EOF {
-				os.Exit(0)
+				return
 			}
 			log.Printf("Can't decode record %d of input: %s\n", rec_num, err)
 			os.Exit(1)
