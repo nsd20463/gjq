@@ -10,6 +10,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -67,25 +69,30 @@ func main() {
 	}
 }
 
+// ------------------------------------------------------------------------------------------------------------
+// decoer of arbitrary JSON objects based on constructing a type with reflection, unmarshaling into an instance
+// of that type, and walking down into the instance and printing out what we find.
+
 type filter interface {
 	filter(reflect.Value, io.Writer) error
 	typeof() reflect.Type
+	scan(*bufio.Reader, io.Writer) error
 }
 
 func makeFilter(arg string, pos int) (filter, error) {
-	// parse the filter string
+	// parse the arg string
 	// we don't handle the entire world. We handle
 	//   .X    ... extract element X from a dict
 	//   []    ... extract all elements of an array
 	// and for this 1st pass, this is all. I'll add more as I need them
 
 	if len(arg) == pos {
-		return nil, fmt.Errorf("can't parse filter %q: expected an element, found the end", arg)
+		return nil, fmt.Errorf("can't parse %q: expected an element, found the end", arg)
 	}
 
 	switch arg[pos] {
 	default:
-		return nil, fmt.Errorf("can't parse filter %q at index %d: unknown operator '%c'", arg, pos, arg[pos])
+		return nil, fmt.Errorf("can't parse %q at index %d: unknown operator '%c'", arg, pos, arg[pos])
 	case '.':
 		var field string
 		var err error
@@ -112,6 +119,7 @@ func makeFilter(arg string, pos int) (filter, error) {
 			field_tag = `json:"` + field + `"`
 		}
 		return &dict{
+			name: field_name,
 			t: reflect.StructOf([]reflect.StructField{
 				reflect.StructField{
 					Name: field_name,
@@ -123,7 +131,7 @@ func makeFilter(arg string, pos int) (filter, error) {
 
 	case '[':
 		if len(arg) < pos+2 || arg[pos+1] != ']' {
-			return nil, fmt.Errorf("can't parse filter %q at index %d: expected ']' after '['", arg, pos)
+			return nil, fmt.Errorf("can't parse %q at index %d: expected ']' after '['", arg, pos)
 		}
 		pos += 2
 
@@ -176,8 +184,9 @@ func (a *array) filter(in reflect.Value, out io.Writer) error {
 }
 
 type dict struct {
-	t reflect.Type // the struct type
-	f filter       // the field type, or nil if this is the leaf
+	name string       // the field name
+	t    reflect.Type // the struct type
+	f    filter       // the field type, or nil if this is the leaf
 }
 
 func (d *dict) typeof() reflect.Type { return d.t }
@@ -191,4 +200,232 @@ func (d *dict) filter(in reflect.Value, out io.Writer) error {
 	_, err := out.Write([]byte(fmt.Sprintf("%s\n", v.Interface())))
 
 	return err
+}
+
+// ------------------------------------------------------------------------
+// arbitrary JSON decoder based on a custom JSON scanner which is optimized for skipping the unwanted fields
+
+func (a *array) scan(in *bufio.Reader, out io.Writer) error {
+	var err error
+	if err = scanWhitespaceToChar(in, '['); err != nil {
+		return err
+	}
+
+	// scan the 1st element, or ']' if this is an empty list
+	var c byte
+	if c, err = scanPastWhitespace(in); err != nil {
+		return err
+	} else if c == ']' {
+		return nil
+	} else if c == 'n' {
+		// null?
+		var n int
+		var null [4]byte
+
+		if n, err = in.Read(null[1:]); n == 3 && null[1] == 'u' && null[2] == 'l' && null[3] == 'l' {
+			// assume it's null
+			// TODO check the next char isn't a letter/it isn't some other word. We'll fail later anyway
+			return err
+		} else if err != nil {
+			return err
+		} else {
+			null[0] = 'n'
+			return fmt.Errorf("expected null, found %q", null)
+		}
+	} else {
+		// this is the 1st byte of the array element; put it back
+		in.UnreadByte()
+	}
+
+	// scan each element
+	for {
+		if err = a.f.scan(in, out); err != nil {
+			return err
+		}
+
+		if c, err = scanPastWhitespace(in); c == ',' {
+			continue
+		} else if c == ']' {
+			return nil
+		} else if err != nil {
+			return err
+		} else {
+			return fmt.Errorf("expected ',' or ']'; found %c", c)
+		}
+	}
+}
+
+func (d *dict) scan(in *bufio.Reader, out io.Writer) error {
+	// find the '{'
+	var err error
+	if err = scanWhitespaceToChar(in, '{'); err != nil {
+		return err
+	}
+
+	for {
+		// find the start of a key
+		if err = scanWhitespaceToChar(in, '"'); err != nil {
+			return err
+		}
+
+		var s string
+		if s, err = scanString(in); s != d.name {
+			if err != nil {
+				return err
+			}
+			// skip ':' and the value
+			if err = scanWhitespaceToChar(in, ':'); err != nil {
+				return err
+			}
+			if err = skipValue(in); err != nil {
+				return err
+			}
+
+		} else {
+			// we found d.name
+			if err = scanWhitespaceToChar(in, ':'); err != nil {
+				return err
+			}
+
+			// scan the value
+			if d.f != nil {
+				d.f.scan(in, out)
+			} else {
+				// print the value
+				if _, err = scanPastWhitespace(in); err != nil {
+					return err
+				}
+				in.UnreadByte()
+
+				// print the value
+				var v []byte
+				if v, err = scanValue(in); err == nil {
+					if _, err = out.Write(v); err != nil {
+						return err
+					}
+					if _, err = out.Write([]byte{'\n'}); err != nil {
+						return err
+					}
+				} else {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// scan forward over whitespace until we find 'c', and stop
+func scanWhitespaceToChar(in *bufio.Reader, c byte) error {
+	data, err := in.ReadSlice(c)
+	if err == nil || (len(data) != 0 && data[len(data)-1] == c) {
+		if len(data) > 1 {
+			// verify that data[:len-1] contains only whitespace
+			for _, x := range data[:len(data)-1] {
+				if !isWhitespace(x) {
+					return fmt.Errorf("expected %c, found %c", c, x)
+				}
+			}
+		}
+		return nil
+	}
+	return err
+}
+
+// scan forward over whitespace; return the first non-whitespace char
+func scanPastWhitespace(in *bufio.Reader) (c byte, err error) {
+	for {
+		c, err = in.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		if !isWhitespace(c) {
+			return c, nil
+		}
+	}
+}
+
+func isWhitespace(c byte) bool {
+	return c == ' ' || c == '\n' || c == '\r' || c == '\t'
+}
+
+// scan a string. the opening '"' has been read
+func scanString(in *bufio.Reader) (string, error) {
+	// TODO unicode!
+	data, err := in.ReadSlice('"')
+	if err == nil && len(data) > 1 && data[len(data)-2] != '\\' {
+		// common case, the '"' terminates the string
+		return unescapeString(data[:len(data)-1]), nil
+	} else if err != nil {
+		return "", err
+	}
+	// the " might be escaped. or the \ might be from a \\ pair. we have to scan the entire data to know
+	esc := false
+	for _, c := range data[:len(data)-1] {
+		if c == '\\' {
+			esc = !esc
+		} else {
+			esc = false
+		}
+	}
+	if !esc {
+		// yup, the " isn't actually escaped
+		return unescapeString(data[:len(data)-1]), nil
+	}
+	// the '"' is escaped. keep the '"' and keep reading
+	data = data[0:len(data):len(data)] // set cap so we can append safely
+	for {
+		j := len(data)
+		data2, err := in.ReadSlice('"')
+		if err != nil {
+			return "", err
+		}
+		data = append(data, data2[:len(data2)-1]...)
+		if data[len(data)-1] != '\\' {
+			return unescapeString(data), nil
+		}
+		esc := false
+		for _, c := range data[j:] {
+			if c == '\\' {
+				esc = !esc
+			} else {
+				esc = false
+			}
+		}
+		if !esc {
+			// yup, the " isn't actually escaped
+			return unescapeString(data), nil
+		}
+		data = append(data, '"')
+	}
+}
+
+func unescapeString(data []byte) string {
+	i := bytes.IndexByte(data, '\\')
+	if i == -1 {
+		// common case, no escaping
+		return string(data)
+	}
+
+	for {
+		// note: \ can't be right at the end b/c the callers checked for that already
+		copy(data[i:], data[i+1:]) // O(n^2), but \ are usually rare
+		data = data[:len(data)-1]
+		j := bytes.IndexByte(data[i+1:], '\\')
+		if j == -1 {
+			return string(data)
+		}
+		i = i + 1 + j
+	}
+}
+
+// skip the next value
+func skipValue(in *bufio.Reader) error {
+	return nil
+}
+
+// scan and return the next value
+func scanValue(in *bufio.Reader) ([]byte, error) {
+	return nil, nil
 }
