@@ -312,8 +312,8 @@ func (d *dict) scan(in *reader, out io.Writer) error {
 			return err
 		}
 
-		var s string
-		if s, err = scanString(in); s != d.name {
+		var s []byte
+		if s, err = scanString(in); string(s) != d.name { // go 1.10 compiler is smart enough to not copy the string during this comparison
 			if err != nil {
 				return err
 			}
@@ -403,14 +403,14 @@ func isWhitespace(c byte) bool {
 }
 
 // scan a string. the opening '"' has been read
-func scanString(in *reader) (string, error) {
+func scanString(in *reader) ([]byte, error) {
 	// TODO unicode!
 	data, err := in.ReadSlice('"')
 	if err == nil && len(data) > 1 && data[len(data)-2] != '\\' {
 		// common case, the '"' terminates the string
 		return unescapeString(data[:len(data)-1]), nil
 	} else if err != nil {
-		return "", err
+		return nil, err
 	}
 	// the " might be escaped. or the \ might be from a \\ pair. we have to scan the entire data to know
 	// IDEA: scan backwards and count how many \ in a row we find
@@ -432,7 +432,7 @@ func scanString(in *reader) (string, error) {
 		j := len(data)
 		data2, err := in.ReadSlice('"')
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		data = append(data, data2[:len(data2)-1]...)
 		if data[len(data)-1] != '\\' {
@@ -454,11 +454,11 @@ func scanString(in *reader) (string, error) {
 	}
 }
 
-func unescapeString(data []byte) string {
+func unescapeString(data []byte) []byte {
 	i := bytes.IndexByte(data, '\\')
 	if i == -1 {
 		// common case, no escaping
-		return string(data)
+		return data
 	}
 
 	for {
@@ -467,7 +467,7 @@ func unescapeString(data []byte) string {
 		data = data[:len(data)-1]
 		j := bytes.IndexByte(data[i+1:], '\\')
 		if j == -1 {
-			return string(data)
+			return data
 		}
 		i = i + 1 + j
 	}
