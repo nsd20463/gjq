@@ -413,6 +413,7 @@ func scanString(in *reader) (string, error) {
 		return "", err
 	}
 	// the " might be escaped. or the \ might be from a \\ pair. we have to scan the entire data to know
+	// IDEA: scan backwards and count how many \ in a row we find
 	esc := false
 	for _, c := range data[:len(data)-1] {
 		if c == '\\' {
