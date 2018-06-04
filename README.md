@@ -9,13 +9,12 @@ For example:
     2
     3
 
-At the moment, with its trivial implementation, it is about 2x faster than jq for the sort of input data
-I'm interested in using it on:
+At the moment gjq is about 4x faster than jq for the sort of input data and filter I'm interested in using it on:
 
     $ time gjq '.X[].Y' <100k_json_records.json >/dev/null
-    real    0m31.673s    
-    user    0m28.396s
-    sys     0m0.680s
+    real    0m14.131s
+    user    0m13.540s
+    sys     0m0.500s
     $ time jq '.X[].Y' <100k_json_records.json >/dev/null
     real    1m3.752s
     user    1m2.780s
