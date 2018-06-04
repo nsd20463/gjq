@@ -313,7 +313,7 @@ func (d *dict) scan(in *reader, out io.Writer) error {
 		}
 
 		var s []byte
-		if s, err = scanString(in); string(s) != d.name { // go 1.10 compiler is smart enough to not copy the string during this comparison
+		if s, err = scanString(in); string(s) != d.name { // go 1.10 compiler is smart enough to not copy the string in this cast+comparison
 			if err != nil {
 				return err
 			}
