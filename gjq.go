@@ -5,6 +5,10 @@
 // Of course it doesn't support more than a fraction of what jq does. On the other hand it supports
 // just what I use jq most often for when processing millions of records.
 //
+// IDEAS:
+//   can I to do this concurrently? The IO I can hide. I don't know if finding boundaries of objects
+//   is so much faster than decoding them that I can get some concurrency out of the object parsing.
+//
 // Copyright 2018 Nicolas S. Dade
 
 package main
@@ -31,6 +35,7 @@ const debug = false
 func main() {
 	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	var stdlib = flag.Bool("stdlib", false, "use stdlib encoding/json")
+	var read_buf_size = flag.Int("buf", 64*1024, "size of input I/O buffer") // experiments show >64kB buffers is, strangely, counter-productive
 
 	flag.Parse()
 
@@ -78,7 +83,7 @@ func main() {
 	} else {
 		// filter using our poorly-written scanner code
 		out := io.Writer(os.Stdout)
-		in := newReader(os.Stdin, 1024*1024)
+		in := newReader(os.Stdin, *read_buf_size)
 		rec_num := 0
 		for {
 			rec_num++
@@ -740,3 +745,5 @@ func (r *reader) ReadSlice(delim byte) ([]byte, error) {
 	}
 	return d, err
 }
+
+// -----------------------------------------------------------------------------------------------
