@@ -426,7 +426,7 @@ func scanString(in *reader) (string, error) {
 		return unescapeString(data[:len(data)-1]), nil
 	}
 	// the '"' is escaped. keep the '"' and keep reading
-	data = data[0:len(data):len(data)] // set cap so we can append safely
+	data = append([]byte(nil), data...) // set cap so we can append safely
 	for {
 		j := len(data)
 		data2, err := in.ReadSlice('"')
