@@ -473,6 +473,35 @@ func unescapeString(data []byte) string {
 	}
 }
 
+// skip a string. the opening '"' has been read
+func skipString(in *reader) error {
+	// TODO unicode!
+	for {
+		data, err := in.ReadSlice('"')
+		if err == nil && len(data) > 1 && data[len(data)-2] != '\\' {
+			// common case, the '"' terminates the string
+			return nil
+		} else if err != nil {
+			return err
+		}
+		// the " might be escaped. or the \ might be from a \\ pair. we have to scan the entire data to know
+		// IDEA: scan backwards and count how many \ in a row we find
+		esc := false
+		for _, c := range data[:len(data)-1] {
+			if c == '\\' {
+				esc = !esc
+			} else {
+				esc = false
+			}
+		}
+		if !esc {
+			// yup, the " isn't actually escaped
+			return nil
+		}
+		// the '"' is escaped. keep reading until we find one which isn't escaped
+	}
+}
+
 // skip the next value
 func skipValue(in *reader) error {
 	c, err := scanPastWhitespace(in)
@@ -544,22 +573,8 @@ func skipValue(in *reader) error {
 
 	case '"':
 		// skip until the closing '""
-		esc := false
-		for {
-			// TODO see if ReadSlice('"') isn't faster
-			c, err = in.ReadByte()
-			if err != nil {
-				return err
-			}
-			if c == '\\' {
-				esc = !esc
-			} else {
-				esc = false
-			}
-			if c == '"' && !esc {
-				return nil
-			}
-		}
+		// this is the hot path in JSON skipping, so first try the common case where the first '"' is not escaped
+		return skipString(in)
 
 	default:
 		// anything else is either a number or a keyword. we just skip until we find the first non-number/keyword char
