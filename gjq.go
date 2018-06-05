@@ -29,12 +29,15 @@ import (
 	"github.com/pkg/errors"
 )
 
-var LF = []byte{'\n'}
+var RAW = false
+var PRETTY = false
 
 func main() {
 	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	var stdlib = flag.Bool("stdlib", false, "use stdlib encoding/json")
 	var read_buf_size = flag.Int("buf", 64*1024, "size of input I/O buffer") // experiments show >64kB buffers is, strangely, counter-productive
+	flag.BoolVar(&RAW, "r", RAW, `raw output for strings (unescape and remove "")`)
+	flag.BoolVar(&PRETTY, "pretty", PRETTY, "pretty-print output")
 
 	flag.Parse()
 
@@ -232,7 +235,22 @@ func (d *dict) filter(in reflect.Value, out io.Writer) error {
 		}
 
 		// we're the leaf. we print v
-		_, err = out.Write([]byte(fmt.Sprintf("%s\n", v.Interface())))
+		txt := []byte(fmt.Sprintf("%s\n", v.Interface()))
+		if RAW && len(txt) >= 3 && txt[0] == '"' {
+			txt = unescapeString(txt[1 : len(txt)-2])
+			txt = append(txt, '\n')
+		}
+
+		if PRETTY {
+			var b bytes.Buffer
+			err = json.Indent(&b, txt, "", "  ")
+			if err != nil {
+				return err
+			}
+			txt = b.Bytes()
+		}
+
+		_, err = out.Write(txt)
 	} else {
 		// print the entire dict
 		_, err = out.Write([]byte(fmt.Sprintf("%s\n", in.Interface())))
@@ -323,11 +341,24 @@ func (d *dict) scan(in *reader, out io.Writer) error {
 		if v, err = appendValue(in, v); err != nil {
 			return err
 		}
-		if _, err = out.Write(v); err != nil {
-			return err
-		}
+		v = append(v, '\n')
 		d.tmp = v[:0] // save the slice for next time, since its capacity is probably right from here-on in, and we we won't have to zero it again
-		if _, err = out.Write(LF); err != nil {
+
+		if RAW && len(v) >= 3 && v[0] == '"' {
+			v = unescapeString(v[1 : len(v)-2])
+			v = append(v, '\n')
+		}
+
+		if PRETTY {
+			var b bytes.Buffer
+			err = json.Indent(&b, v, "", "  ")
+			if err != nil {
+				return err
+			}
+			v = b.Bytes()
+		}
+
+		if _, err = out.Write(v); err != nil {
 			return err
 		}
 		return nil
@@ -373,11 +404,24 @@ func (d *dict) scan(in *reader, out io.Writer) error {
 				if v, err = appendValue(in, v); err != nil {
 					return err
 				}
-				if _, err = out.Write(v); err != nil {
-					return err
-				}
+				v = append(v, '\n')
 				d.tmp = v[:0] // save the slice for next time, since its capacity is probably right from here-on in, and we we won't have to zero it again
-				if _, err = out.Write(LF); err != nil {
+
+				if RAW && len(v) >= 3 && v[0] == '"' {
+					v = unescapeString(v[1 : len(v)-2])
+					v = append(v, '\n')
+				}
+
+				if PRETTY {
+					var b bytes.Buffer
+					err = json.Indent(&b, v, "", "  ")
+					if err != nil {
+						return err
+					}
+					v = b.Bytes()
+				}
+
+				if _, err = out.Write(v); err != nil {
 					return err
 				}
 			}
