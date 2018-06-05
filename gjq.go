@@ -32,6 +32,8 @@ import (
 
 const debug = false
 
+var LF = []byte{'\n'}
+
 func main() {
 	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	var stdlib = flag.Bool("stdlib", false, "use stdlib encoding/json")
@@ -112,6 +114,7 @@ type filter interface {
 func makeFilter(arg string, pos int) (filter, error) {
 	// parse the arg string
 	// we don't handle the entire world. We handle
+	//   .     ... extract a entire dict
 	//   .X    ... extract element X from a dict
 	//   []    ... extract all elements of an array
 	// and for this 1st pass, this is all. I'll add more as I need them
@@ -126,38 +129,42 @@ func makeFilter(arg string, pos int) (filter, error) {
 	case '.':
 		var field string
 		var err error
-		field, pos, err = extractFieldName(arg, pos+1)
-		if err != nil {
+		if pos+1 == len(arg) {
+			// '.' terminates the filter. we are to return the entire dict
+			return &dict{
+				t: reflect.TypeOf(json.RawMessage{}),
+			}, nil
+		} else if field, pos, err = extractFieldName(arg, pos+1); err != nil {
 			return nil, err
-		}
-
-		var field_type reflect.Type
-		var f filter
-		if len(arg) == pos {
-			// this is the innermost field
-			field_type = reflect.TypeOf(json.RawMessage{})
 		} else {
-			f, err = makeFilter(arg, pos)
-			if err != nil {
-				return nil, err
+			var field_type reflect.Type
+			var f filter
+			if len(arg) == pos {
+				// this is the innermost field
+				field_type = reflect.TypeOf(json.RawMessage{})
+			} else {
+				f, err = makeFilter(arg, pos)
+				if err != nil {
+					return nil, err
+				}
+				field_type = f.typeof()
 			}
-			field_type = f.typeof()
+			field_name := strings.ToTitle(field[:1]) + field[1:]
+			var field_tag string
+			if field_name != field {
+				field_tag = `json:"` + field + `"`
+			}
+			return &dict{
+				name: field_name,
+				t: reflect.StructOf([]reflect.StructField{
+					reflect.StructField{
+						Name: field_name,
+						Type: field_type,
+						Tag:  reflect.StructTag(field_tag),
+					}}),
+				f: f,
+			}, nil
 		}
-		field_name := strings.ToTitle(field[:1]) + field[1:]
-		var field_tag string
-		if field_name != field {
-			field_tag = `json:"` + field + `"`
-		}
-		return &dict{
-			name: field_name,
-			t: reflect.StructOf([]reflect.StructField{
-				reflect.StructField{
-					Name: field_name,
-					Type: field_type,
-					Tag:  reflect.StructTag(field_tag),
-				}}),
-			f: f,
-		}, nil
 
 	case '[':
 		if len(arg) < pos+2 || arg[pos+1] != ']' {
@@ -212,21 +219,27 @@ func (a *array) filter(in reflect.Value, out io.Writer) error {
 }
 
 type dict struct {
-	name string       // the field name
-	t    reflect.Type // the struct type
+	name string       // the field name, or "" if we are to output the entire dict
+	t    reflect.Type // the struct type, or the json.RawMessage type if we're outputting the entire dict
 	f    filter       // the field type, or nil if this is the leaf
+	tmp  []byte       // tmp buffer with (eventually) an appropriate capacity. avoids append reallocs and gc work
 }
 
 func (d *dict) typeof() reflect.Type { return d.t }
 func (d *dict) filter(in reflect.Value, out io.Writer) error {
-	v := in.Field(0)
-	if d.f != nil {
-		return d.f.filter(v, out)
+	var err error
+	if d.name != "" {
+		v := in.Field(0)
+		if d.f != nil {
+			return d.f.filter(v, out)
+		}
+
+		// we're the leaf. we print v
+		_, err = out.Write([]byte(fmt.Sprintf("%s\n", v.Interface())))
+	} else {
+		// print the entire dict
+		_, err = out.Write([]byte(fmt.Sprintf("%s\n", in.Interface())))
 	}
-
-	// we're the leaf. we print v
-	_, err := out.Write([]byte(fmt.Sprintf("%s\n", v.Interface())))
-
 	return err
 }
 
@@ -306,6 +319,23 @@ func (d *dict) scan(in *reader, out io.Writer) error {
 		return err
 	}
 
+	if d.name == "" {
+		// we're matching the entire dict
+		in.UnreadByte()
+		var v = d.tmp
+		if v, err = appendValue(in, v); err != nil {
+			return err
+		}
+		if _, err = out.Write(v); err != nil {
+			return err
+		}
+		d.tmp = v[:0] // save the slice for next time, since its capacity is probably right from here-on in, and we we won't have to zero it again
+		if _, err = out.Write(LF); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	for {
 		// find the start of a key
 		if err = scanWhitespaceToChar(in, '"'); err != nil {
@@ -342,15 +372,15 @@ func (d *dict) scan(in *reader, out io.Writer) error {
 				in.UnreadByte()
 
 				// print the value
-				var v []byte
-				if v, err = scanValue(in); err == nil {
-					if _, err = out.Write(v); err != nil {
-						return err
-					}
-					if _, err = out.Write([]byte{'\n'}); err != nil {
-						return err
-					}
-				} else {
+				var v = d.tmp
+				if v, err = appendValue(in, v); err != nil {
+					return err
+				}
+				if _, err = out.Write(v); err != nil {
+					return err
+				}
+				d.tmp = v[:0] // save the slice for next time, since its capacity is probably right from here-on in, and we we won't have to zero it again
+				if _, err = out.Write(LF); err != nil {
 					return err
 				}
 			}
@@ -595,8 +625,7 @@ func skipValue(in *reader) error {
 }
 
 // scan and return the next value
-func scanValue(in *reader) ([]byte, error) {
-	var value, v []byte
+func appendValue(in *reader, value []byte) ([]byte, error) {
 	c, err := scanPastWhitespace(in)
 	if err != nil {
 		return value, err
@@ -622,10 +651,10 @@ func scanValue(in *reader) ([]byte, error) {
 				}
 			} else {
 				in.UnreadByte()
+				value = value[:len(value)-1]
 			}
 			first = false
-			v, err = scanValue(in) // value better be a string, but we don't care
-			value = append(value, v...)
+			value, err = appendValue(in, value) // value better be a string, but we don't care
 			if err != nil {
 				return value, err
 			}
@@ -637,8 +666,7 @@ func scanValue(in *reader) ([]byte, error) {
 			if c != ':' {
 				return value, errors.Errorf("at %d expected ':', found '%c'", in.pos, c)
 			}
-			v, err = scanValue(in)
-			value = append(value, v...)
+			value, err = appendValue(in, value)
 			if err != nil {
 				return value, err
 			}
@@ -662,10 +690,10 @@ func scanValue(in *reader) ([]byte, error) {
 				}
 			} else {
 				in.UnreadByte()
+				value = value[:len(value)-1]
 			}
 			first = false
-			v, err = scanValue(in)
-			value = append(value, v...)
+			value, err = appendValue(in, value)
 			if err != nil {
 				return value, err
 			}
