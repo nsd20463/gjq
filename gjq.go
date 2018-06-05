@@ -434,7 +434,6 @@ func isWhitespace(c byte) bool {
 
 // scan and return the unescaped string. the opening '"' has been read
 func scanString(in *reader) ([]byte, error) {
-	// TODO unicode!
 	data, err := in.ReadSlice('"')
 	if err == nil && (len(data) < 2 || data[len(data)-2] != '\\') {
 		// common case, the '"' terminates the string
@@ -486,7 +485,6 @@ func scanString(in *reader) ([]byte, error) {
 
 // append a escaped (\'s intact) string and the terminating '"' to value. the opening '"' has been read
 func appendString(in *reader, value []byte) ([]byte, error) {
-	// TODO unicode!
 	for {
 		data, err := in.ReadSlice('"')
 		if err == nil && (len(data) < 2 || data[len(data)-2] != '\\') {
@@ -535,7 +533,6 @@ func unescapeString(data []byte) []byte {
 
 // skip a string. the opening '"' has been read
 func skipString(in *reader) error {
-	// TODO unicode!
 	for {
 		data, err := in.ReadSlice('"')
 		if err == nil && (len(data) < 2 || data[len(data)-2] != '\\') {
