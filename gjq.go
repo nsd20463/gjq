@@ -32,6 +32,8 @@ import (
 var RAW = false
 var PRETTY = false
 
+var json_rawmsg_type = reflect.TypeOf(json.RawMessage{})
+
 func main() {
 	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	var stdlib = flag.Bool("stdlib", false, "use stdlib encoding/json")
@@ -114,7 +116,7 @@ type filter interface {
 func makeFilter(arg string, pos int) (filter, error) {
 	// parse the arg string
 	// we don't handle the entire world. We handle
-	//   .     ... extract a entire dict
+	//   .     ... extract a entire value
 	//   .X    ... extract element X from a dict
 	//   []    ... extract all elements of an array
 	// and for this 1st pass, this is all. I'll add more as I need them
@@ -130,10 +132,8 @@ func makeFilter(arg string, pos int) (filter, error) {
 		var field string
 		var err error
 		if pos+1 == len(arg) {
-			// '.' terminates the filter. we are to return the entire dict
-			return &dict{
-				t: reflect.TypeOf(json.RawMessage{}),
-			}, nil
+			// '.' terminates the filter. we are to return the entire value
+			return &value{}, nil
 		} else if field, pos, err = extractFieldName(arg, pos+1); err != nil {
 			return nil, err
 		} else {
@@ -141,7 +141,7 @@ func makeFilter(arg string, pos int) (filter, error) {
 			var f filter
 			if len(arg) == pos {
 				// this is the innermost field
-				field_type = reflect.TypeOf(json.RawMessage{})
+				field_type = json_rawmsg_type
 			} else {
 				f, err = makeFilter(arg, pos)
 				if err != nil {
@@ -219,42 +219,48 @@ func (a *array) filter(in reflect.Value, out io.Writer) error {
 }
 
 type dict struct {
-	name string       // the field name, or "" if we are to output the entire dict
+	name string       // the field name
 	f    filter       // the field type, or nil if this is the leaf
 	tmp  []byte       // tmp buffer with (eventually) an appropriate capacity. avoids append reallocs and gc work
-	t    reflect.Type // the struct type, or the json.RawMessage type if we're outputting the entire dict
+	t    reflect.Type // the struct type with one field called 'name' (or more precisely, an uppercase version of 'name')
 }
 
 func (d *dict) typeof() reflect.Type { return d.t }
 func (d *dict) filter(in reflect.Value, out io.Writer) error {
 	var err error
-	if d.name != "" {
-		v := in.Field(0)
-		if d.f != nil {
-			return d.f.filter(v, out)
-		}
-
-		// we're the leaf. we print v
-		txt := []byte(fmt.Sprintf("%s\n", v.Interface()))
-		if RAW && len(txt) >= 3 && txt[0] == '"' {
-			txt = unescapeString(txt[1 : len(txt)-2])
-			txt = append(txt, '\n')
-		}
-
-		if PRETTY {
-			var b bytes.Buffer
-			err = json.Indent(&b, txt, "", "  ")
-			if err != nil {
-				return err
-			}
-			txt = b.Bytes()
-		}
-
-		_, err = out.Write(txt)
-	} else {
-		// print the entire dict
-		_, err = out.Write([]byte(fmt.Sprintf("%s\n", in.Interface())))
+	v := in.Field(0)
+	if d.f != nil {
+		return d.f.filter(v, out)
 	}
+
+	// we're the leaf. we print v
+	txt := []byte(fmt.Sprintf("%s\n", v.Interface()))
+	if RAW && len(txt) >= 3 && txt[0] == '"' {
+		txt = unescapeString(txt[1 : len(txt)-2])
+		txt = append(txt, '\n')
+	}
+
+	if PRETTY {
+		var b bytes.Buffer
+		err = json.Indent(&b, txt, "", "  ")
+		if err != nil {
+			return err
+		}
+		txt = b.Bytes()
+	}
+
+	_, err = out.Write(txt)
+	return err
+}
+
+type value struct {
+	tmp []byte // tmp buffer with (eventually) an appropriate capacity. avoids append reallocs and gc work
+}
+
+func (val *value) typeof() reflect.Type { return json_rawmsg_type }
+func (val *value) filter(in reflect.Value, out io.Writer) error {
+	// print the entire value
+	_, err := out.Write([]byte(fmt.Sprintf("%s\n", in.Interface())))
 	return err
 }
 
@@ -334,36 +340,6 @@ func (d *dict) scan(in *reader, out io.Writer) error {
 		return err
 	}
 
-	if d.name == "" {
-		// we're matching the entire dict
-		in.UnreadByte()
-		var v = d.tmp
-		if v, err = appendValue(in, v); err != nil {
-			return err
-		}
-		v = append(v, '\n')
-		d.tmp = v[:0] // save the slice for next time, since its capacity is probably right from here-on in, and we we won't have to zero it again
-
-		if RAW && len(v) >= 3 && v[0] == '"' {
-			v = unescapeString(v[1 : len(v)-2])
-			v = append(v, '\n')
-		}
-
-		if PRETTY {
-			var b bytes.Buffer
-			err = json.Indent(&b, v, "", "  ")
-			if err != nil {
-				return err
-			}
-			v = b.Bytes()
-		}
-
-		if _, err = out.Write(v); err != nil {
-			return err
-		}
-		return nil
-	}
-
 	for {
 		// find the start of a key
 		if err = scanWhitespaceToChar(in, '"'); err != nil {
@@ -437,6 +413,35 @@ func (d *dict) scan(in *reader, out io.Writer) error {
 			return errors.Errorf("at %d expected ',' or '}'; found %c", in.pos, c)
 		}
 	}
+}
+
+func (val *value) scan(in *reader, out io.Writer) error {
+	var v = val.tmp
+	var err error
+	if v, err = appendValue(in, v); err != nil {
+		return err
+	}
+	v = append(v, '\n')
+	val.tmp = v[:0] // save the buffer for later
+
+	if RAW && len(v) >= 3 && v[0] == '"' {
+		v = unescapeString(v[1 : len(v)-2])
+		v = append(v, '\n')
+	}
+
+	if PRETTY {
+		var b bytes.Buffer
+		err = json.Indent(&b, v, "", "  ")
+		if err != nil {
+			return err
+		}
+		v = b.Bytes()
+	}
+
+	if _, err = out.Write(v); err != nil {
+		return err
+	}
+	return nil
 }
 
 // scan forward over whitespace until we find 'c', and stop
