@@ -27,9 +27,7 @@ in this file is 27kB, and I'm extracting a small (20 byte) field from a handful 
 The output contains 171k elements.
 
 
-Another performance comparison, 7x in this case, which consists of outputting everything.
-This one isn't quite fair, since jq is compacting the output and gjq is copying
-it through as-is. Then again all my input is compacted to begin with.
+Another performance comparison, 7x in this case, which consists of outputting everything compacted.
 
     $ time gjq '.' <100k_json_records.json >/dev/null
     real    0m17.280s
