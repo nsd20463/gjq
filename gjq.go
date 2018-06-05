@@ -23,14 +23,11 @@ import (
 	"log"
 	"os"
 	"reflect"
-	"runtime"
 	"runtime/pprof"
 	"strings"
 
 	"github.com/pkg/errors"
 )
-
-const debug = false
 
 var LF = []byte{'\n'}
 
@@ -765,11 +762,6 @@ func newReader(in io.Reader, size int) *reader {
 func (r *reader) ReadByte() (byte, error) {
 	c, err := r.r.ReadByte()
 	if err == nil {
-		if debug {
-			_, _, line1, _ := runtime.Caller(1)
-			_, _, line2, _ := runtime.Caller(2)
-			log.Printf("%d:%d ReadByte() -> %c", line1, line2, c)
-		}
 		r.pos++
 	}
 	return c, err
@@ -778,11 +770,6 @@ func (r *reader) ReadByte() (byte, error) {
 func (r *reader) UnreadByte() error {
 	err := r.r.UnreadByte()
 	if err == nil {
-		if debug {
-			_, _, line1, _ := runtime.Caller(1)
-			_, _, line2, _ := runtime.Caller(2)
-			log.Printf("%d:%d UnreadByte()", line1, line2)
-		}
 		r.pos--
 	}
 	return err
@@ -791,13 +778,6 @@ func (r *reader) UnreadByte() error {
 func (r *reader) ReadSlice(delim byte) ([]byte, error) {
 	d, err := r.r.ReadSlice(delim)
 	r.pos += len(d)
-	if err == nil {
-		if debug {
-			_, _, line1, _ := runtime.Caller(1)
-			_, _, line2, _ := runtime.Caller(2)
-			log.Printf("%d:%d ReadSlice() -> [%d] %q", line1, line2, len(d), d)
-		}
-	}
 	return d, err
 }
 
