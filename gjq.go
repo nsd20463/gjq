@@ -155,7 +155,7 @@ func makeFilter(arg string, pos int) (filter, error) {
 				field_tag = `json:"` + field + `"`
 			}
 			return &dict{
-				name: field_name,
+				name: field,
 				t: reflect.StructOf([]reflect.StructField{
 					reflect.StructField{
 						Name: field_name,
