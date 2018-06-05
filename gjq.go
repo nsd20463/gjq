@@ -484,6 +484,36 @@ func scanString(in *reader) ([]byte, error) {
 	}
 }
 
+// append a escaped (\'s intact) string and the terminating '"' to value. the opening '"' has been read
+func appendString(in *reader, value []byte) ([]byte, error) {
+	// TODO unicode!
+	for {
+		data, err := in.ReadSlice('"')
+		if err == nil && len(data) > 1 && data[len(data)-2] != '\\' {
+			// common case, the '"' terminates the string
+			return append(value, data...), nil
+		} else if err != nil {
+			return value, err
+		}
+		// the " might be escaped. or the \ might be from a \\ pair. we have to scan the entire data to know
+		// IDEA: scan backwards and count how many \ in a row we find
+		esc := false
+		for _, c := range data[:len(data)-1] {
+			if c == '\\' {
+				esc = !esc
+			} else {
+				esc = false
+			}
+		}
+		if !esc {
+			// yup, the " isn't actually escaped
+			return append(value, data...), nil
+		}
+		// the '"' is escaped. keep the '"' and keep reading
+		value = append(value, data...)
+	}
+}
+
 func unescapeString(data []byte) []byte {
 	i := bytes.IndexByte(data, '\\')
 	if i == -1 {
@@ -700,23 +730,7 @@ func appendValue(in *reader, value []byte) ([]byte, error) {
 		}
 
 	case '"':
-		// scan until the closing '""
-		esc := false
-		for {
-			c, err = in.ReadByte()
-			if err != nil {
-				return value, err
-			}
-			value = append(value, c)
-			if c == '\\' {
-				esc = !esc
-			} else {
-				esc = false
-			}
-			if c == '"' && !esc {
-				return value, nil
-			}
-		}
+		return appendString(in, value)
 
 	default:
 		// anything else is either a number or a keyword. we just scan until we find the first non-number/keyword char
