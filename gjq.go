@@ -106,9 +106,9 @@ func main() {
 // of that type, and walking down into the instance and printing out what we find.
 
 type filter interface {
+	scan(*reader, io.Writer) error
 	filter(reflect.Value, io.Writer) error
 	typeof() reflect.Type
-	scan(*reader, io.Writer) error
 }
 
 func makeFilter(arg string, pos int) (filter, error) {
@@ -203,8 +203,8 @@ func extractFieldName(arg string, pos int) (field string, remaining_pos int, err
 }
 
 type array struct {
-	t reflect.Type // a slice type
 	f filter       // element type
+	t reflect.Type // a slice type
 }
 
 func (a *array) typeof() reflect.Type { return a.t }
@@ -220,9 +220,9 @@ func (a *array) filter(in reflect.Value, out io.Writer) error {
 
 type dict struct {
 	name string       // the field name, or "" if we are to output the entire dict
-	t    reflect.Type // the struct type, or the json.RawMessage type if we're outputting the entire dict
 	f    filter       // the field type, or nil if this is the leaf
 	tmp  []byte       // tmp buffer with (eventually) an appropriate capacity. avoids append reallocs and gc work
+	t    reflect.Type // the struct type, or the json.RawMessage type if we're outputting the entire dict
 }
 
 func (d *dict) typeof() reflect.Type { return d.t }
