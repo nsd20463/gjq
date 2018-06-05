@@ -25,3 +25,19 @@ At the moment gjq is about 4x faster than jq for the sort of input data and filt
 The test input is 100,000 lines, each line is a single compacted JSON object. The average size of an object
 in this file is 27kB, and I'm extracting a small (20 byte) field from a handful of list elements in each object.
 The output contains 171k elements.
+
+
+Another performance comparison, 7x in this case, which consists of outputting everything.
+This one isn't quite fair, since jq is compacting the output and gjq is copying
+it through as-is. Then again all my input is compacted to begin with.
+
+    $ time gjq '.' <100k_json_records.json >/dev/null
+    real    0m17.280s
+    user    0m16.616s
+    sys     0m0.604s
+    $ time jq -c '.' <100k_json_records.json >/dev/null
+    real    2m4.632s
+    user    2m3.708s
+    sys     0m0.848s
+
+(Note the -c flag to jq helps it. Without it it takes 2m29s)
