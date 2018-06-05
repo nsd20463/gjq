@@ -38,4 +38,4 @@ Another performance comparison, 8x in this case, which consists of outputting ev
     user    2m3.708s
     sys     0m0.848s
 
-(Note the -c flag to jq helps it. Without it it takes 2m29s)
+(Note passing jq the -c flag helps. Without -c it takes 2m29s)
