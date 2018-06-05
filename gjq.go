@@ -119,10 +119,12 @@ func makeFilter(arg string, pos int) (filter, error) {
 	//   .     ... extract a entire value
 	//   .X    ... extract element X from a dict
 	//   []    ... extract all elements of an array
+	//   .[]   ... same as [] (for compatability with jq, which doesn't accept just '[]')
 	// and for this 1st pass, this is all. I'll add more as I need them
 
 	if len(arg) == pos {
-		return nil, errors.Errorf("can't parse %q: expected an element, found the end", arg)
+		// an empty filter matches everything
+		return &value{}, nil
 	}
 
 	switch arg[pos] {
@@ -134,6 +136,9 @@ func makeFilter(arg string, pos int) (filter, error) {
 		if pos+1 == len(arg) {
 			// '.' terminates the filter. we are to return the entire value
 			return &value{}, nil
+		} else if arg[pos+1] == '[' {
+			// .[] case. we ignore the . and move on to the []
+			return makeFilter(arg, pos+1)
 		} else if field, pos, err = extractFieldName(arg, pos+1); err != nil {
 			return nil, err
 		} else {
