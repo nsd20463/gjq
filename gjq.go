@@ -700,9 +700,9 @@ func skipValue(in *reader) error {
 			// the longest number is a double-precision float, 1+16+1+2+4 = 23 chars. So peeking ahead 32 bytes is enough
 			// to find the end in the first iteration.
 			buf, err := in.r.Peek(32)
-			if err != nil && !(err == bufio.ErrBufferFull && len(buf) != 0) {
+			if err != nil && !((err == bufio.ErrBufferFull || err == io.EOF) && len(buf) != 0) {
 				return err
-			} // if it's a ErrBufferFull then buf is truncated due to EOF and we want to process what we have peeked
+			} // if it's a ErrBufferFull or EOF then buf is truncated and we want to process what we have peeked
 			for i, c := range buf {
 				switch {
 				case 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == 'E', c == '+', c == '-', c == '.': // keywords (true, false, null) are in lowercase ascii; no need to handle UTF-8. I do need to allow 'E' for the float format, since JSON allows both e and E
@@ -822,9 +822,9 @@ func appendValue(in *reader, value []byte) ([]byte, error) {
 			// the longest number is a double-precision float, 1+16+1+2+4 = 23 chars. So peeking ahead 32 bytes is enough
 			// to find the end in the first iteration.
 			buf, err := in.r.Peek(32)
-			if err != nil && !(err == bufio.ErrBufferFull && len(buf) != 0) {
+			if err != nil && !((err == bufio.ErrBufferFull || err == io.EOF) && len(buf) != 0) {
 				return value, err
-			} // if it's a ErrBufferFull then buf is truncated due to EOF and we want to process what we have peeked
+			} // if it's a ErrBufferFull or EOF then buf is truncated and we want to process what we have peeked
 			for i, c := range buf {
 				switch {
 				case 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == 'E', c == '+', c == '-', c == '.': // keywords (true, false, null) are in lowercase ascii; no need to handle UTF-8. I do need to allow 'E' for the float format, since JSON allows both e and E
