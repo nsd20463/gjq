@@ -558,9 +558,12 @@ func skipString(in *reader) error {
 
 // skip the next value
 func skipValue(in *reader) error {
-	c, err := scanPastWhitespace(in)
-	if err != nil {
-		return err
+	c, err := in.ReadByte()
+	for err != nil || isWhitespace(c) {
+		if err != nil {
+			return err
+		}
+		c, err = in.ReadByte()
 	}
 
 	switch c {
@@ -568,9 +571,12 @@ func skipValue(in *reader) error {
 		// skip name:values until the closing '}'
 		first := true
 		for {
-			c, err := scanPastWhitespace(in)
-			if err != nil {
-				return err
+			c, err = in.ReadByte()
+			for err != nil || isWhitespace(c) {
+				if err != nil {
+					return err
+				}
+				c, err = in.ReadByte()
 			}
 			if c == '}' {
 				return nil
@@ -587,10 +593,15 @@ func skipValue(in *reader) error {
 			if err != nil {
 				return err
 			}
-			c, err = scanPastWhitespace(in)
-			if err != nil {
-				return err
+
+			c, err = in.ReadByte()
+			for err != nil || isWhitespace(c) {
+				if err != nil {
+					return err
+				}
+				c, err = in.ReadByte()
 			}
+
 			if c != ':' {
 				return errors.Errorf("at %d expected ':', found '%c'", in.pos, c)
 			}
@@ -604,10 +615,14 @@ func skipValue(in *reader) error {
 		// skip values until the closing ']'
 		first := true
 		for {
-			c, err := scanPastWhitespace(in)
-			if err != nil {
-				return err
+			c, err = in.ReadByte()
+			for err != nil || isWhitespace(c) {
+				if err != nil {
+					return err
+				}
+				c, err = in.ReadByte()
 			}
+
 			if c == ']' {
 				return nil
 			}
@@ -650,10 +665,14 @@ func skipValue(in *reader) error {
 
 // scan and return the next value
 func appendValue(in *reader, value []byte) ([]byte, error) {
-	c, err := scanPastWhitespace(in)
-	if err != nil {
-		return value, err
+	c, err := in.ReadByte()
+	for err != nil || isWhitespace(c) {
+		if err != nil {
+			return value, err
+		}
+		c, err = in.ReadByte()
 	}
+
 	value = append(value, c)
 
 	switch c {
@@ -661,10 +680,14 @@ func appendValue(in *reader, value []byte) ([]byte, error) {
 		// scan name:values until the closing '}'
 		first := true
 		for {
-			c, err := scanPastWhitespace(in)
-			if err != nil {
-				return value, err
+			c, err = in.ReadByte()
+			for err != nil || isWhitespace(c) {
+				if err != nil {
+					return value, err
+				}
+				c, err = in.ReadByte()
 			}
+
 			value = append(value, c)
 			if c == '}' {
 				return value, nil
@@ -682,10 +705,15 @@ func appendValue(in *reader, value []byte) ([]byte, error) {
 			if err != nil {
 				return value, err
 			}
-			c, err = scanPastWhitespace(in)
-			if err != nil {
-				return value, err
+
+			c, err = in.ReadByte()
+			for err != nil || isWhitespace(c) {
+				if err != nil {
+					return value, err
+				}
+				c, err = in.ReadByte()
 			}
+
 			value = append(value, c)
 			if c != ':' {
 				return value, errors.Errorf("at %d expected ':', found '%c'", in.pos, c)
@@ -700,10 +728,14 @@ func appendValue(in *reader, value []byte) ([]byte, error) {
 		// scan values until the closing ']'
 		first := true
 		for {
-			c, err := scanPastWhitespace(in)
-			if err != nil {
-				return value, err
+			c, err = in.ReadByte()
+			for err != nil || isWhitespace(c) {
+				if err != nil {
+					return value, err
+				}
+				c, err = in.ReadByte()
 			}
+
 			value = append(value, c)
 			if c == ']' {
 				return value, nil

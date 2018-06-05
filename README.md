@@ -12,9 +12,9 @@ For example:
 At the moment gjq is about 4x faster than jq for the sort of input data and filter I'm interested in using it on:
 
     $ time gjq '.X[].Y' <100k_json_records.json >/dev/null
-    real    0m14.131s
-    user    0m13.540s
-    sys     0m0.500s
+    real    0m13.566s
+    user    0m13.080s
+    sys     0m0.428s
     $ time jq '.X[].Y' <100k_json_records.json >/dev/null
     real    1m3.752s
     user    1m2.780s
@@ -27,12 +27,12 @@ in this file is 27kB, and I'm extracting a small (20 byte) field from a handful 
 The output contains 171k elements.
 
 
-Another performance comparison, 7x in this case, which consists of outputting everything compacted.
+Another performance comparison, 8x in this case, which consists of outputting everything compacted.
 
     $ time gjq '.' <100k_json_records.json >/dev/null
-    real    0m17.280s
-    user    0m16.616s
-    sys     0m0.604s
+    real    0m15.437s
+    user    0m14.920s
+    sys     0m0.480s
     $ time jq -c '.' <100k_json_records.json >/dev/null
     real    2m4.632s
     user    2m3.708s
