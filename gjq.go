@@ -432,11 +432,11 @@ func isWhitespace(c byte) bool {
 	return c == ' ' || c == '\n' || c == '\r' || c == '\t'
 }
 
-// scan a string. the opening '"' has been read
+// scan and return the unescaped string. the opening '"' has been read
 func scanString(in *reader) ([]byte, error) {
 	// TODO unicode!
 	data, err := in.ReadSlice('"')
-	if err == nil && len(data) > 1 && data[len(data)-2] != '\\' {
+	if err == nil && (len(data) < 2 || data[len(data)-2] != '\\') {
 		// common case, the '"' terminates the string
 		return unescapeString(data[:len(data)-1]), nil
 	} else if err != nil {
@@ -489,7 +489,7 @@ func appendString(in *reader, value []byte) ([]byte, error) {
 	// TODO unicode!
 	for {
 		data, err := in.ReadSlice('"')
-		if err == nil && len(data) > 1 && data[len(data)-2] != '\\' {
+		if err == nil && (len(data) < 2 || data[len(data)-2] != '\\') {
 			// common case, the '"' terminates the string
 			return append(value, data...), nil
 		} else if err != nil {
@@ -538,7 +538,7 @@ func skipString(in *reader) error {
 	// TODO unicode!
 	for {
 		data, err := in.ReadSlice('"')
-		if err == nil && len(data) > 1 && data[len(data)-2] != '\\' {
+		if err == nil && (len(data) < 2 || data[len(data)-2] != '\\') {
 			// common case, the '"' terminates the string
 			return nil
 		} else if err != nil {
