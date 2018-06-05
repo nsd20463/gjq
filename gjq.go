@@ -692,16 +692,25 @@ func skipValue(in *reader) error {
 	default:
 		// anything else is either a number or a keyword. we just skip until we find the first non-number/keyword char
 		for {
-			c, err = in.ReadByte()
+			// the longest number is a double-precision float, 1+16+1+2+4 = 23 chars. So peeking ahead 32 bytes is enough
+			// to find the end in the first iteration.
+			buf, err := in.r.Peek(32)
+			if err != nil && !(err == bufio.ErrBufferFull && len(buf) != 0) {
+				return err
+			} // if it's a ErrBufferFull then buf is truncated due to EOF and we want to process what we have peeked
+			for i, c := range buf {
+				switch {
+				case 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == 'E', c == '+', c == '-', c == '.': // keywords (true, false, null) are in lowercase ascii; no need to handle UTF-8. I do need to allow 'E' for the float format, since JSON allows both e and E
+				default:
+					// stop here
+					_, err := in.Discard(i) // we know the discard succeeds b/c we just Peek()ed at least as much
+					return err
+				}
+			}
+			// if we get here then there are more than 32 chars in the keyword or number. weird. out of paranoia I'll support it
+			_, err = in.Discard(len(buf))
 			if err != nil {
 				return err
-			}
-			switch {
-			case 'a' <= c && c <= 'z', '0' <= c && c <= '9', 'A' <= c && c <= 'Z', c == '_', c == '+', c == '-', c == '.':
-				continue
-			default:
-				in.UnreadByte()
-				return nil
 			}
 		}
 	}
@@ -805,17 +814,27 @@ func appendValue(in *reader, value []byte) ([]byte, error) {
 	default:
 		// anything else is either a number or a keyword. we just scan until we find the first non-number/keyword char
 		for {
-			c, err = in.ReadByte()
+			// the longest number is a double-precision float, 1+16+1+2+4 = 23 chars. So peeking ahead 32 bytes is enough
+			// to find the end in the first iteration.
+			buf, err := in.r.Peek(32)
+			if err != nil && !(err == bufio.ErrBufferFull && len(buf) != 0) {
+				return value, err
+			} // if it's a ErrBufferFull then buf is truncated due to EOF and we want to process what we have peeked
+			for i, c := range buf {
+				switch {
+				case 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == 'E', c == '+', c == '-', c == '.': // keywords (true, false, null) are in lowercase ascii; no need to handle UTF-8. I do need to allow 'E' for the float format, since JSON allows both e and E
+				default:
+					// stop here
+					value = append(value, buf[:i]...)
+					_, err := in.Discard(i) // we know the discard succeeds b/c we just Peek()ed at least as much
+					return value, err
+				}
+			}
+			// if we get here then there are more than 32 chars in the keyword or number. weird. out of paranoia I'll support it
+			value = append(value, buf...)
+			_, err = in.Discard(len(buf))
 			if err != nil {
 				return value, err
-			}
-			switch {
-			case 'a' <= c && c <= 'z', '0' <= c && c <= '9', 'A' <= c && c <= 'Z', c == '_', c == '+', c == '-', c == '.':
-				value = append(value, c)
-				continue
-			default:
-				in.UnreadByte()
-				return value, nil
 			}
 		}
 	}
@@ -855,6 +874,12 @@ func (r *reader) ReadSlice(delim byte) ([]byte, error) {
 	d, err := r.r.ReadSlice(delim)
 	r.pos += len(d)
 	return d, err
+}
+
+func (r *reader) Discard(n int) (int, error) {
+	a, err := r.r.Discard(n)
+	r.pos += a
+	return a, err
 }
 
 // -----------------------------------------------------------------------------------------------
