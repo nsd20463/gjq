@@ -207,6 +207,7 @@ func extractFieldName(arg string, pos int) (field string, remaining_pos int, err
 	return arg[pos:], len(arg), nil
 }
 
+// JSON array (Go slice)
 type array struct {
 	f filter       // element type
 	t reflect.Type // a slice type
@@ -223,6 +224,7 @@ func (a *array) filter(in reflect.Value, out io.Writer) error {
 	return nil
 }
 
+// JSON dictionary (Go struct)
 type dict struct {
 	name string       // the field name
 	f    filter       // the field type, or nil if this is the leaf
@@ -258,6 +260,7 @@ func (d *dict) filter(in reflect.Value, out io.Writer) error {
 	return err
 }
 
+// JSON value (might be a whole JSON object) (Go json.RawMessage)
 type value struct {
 	tmp []byte // tmp buffer with (eventually) an appropriate capacity. avoids append reallocs and gc work
 }
