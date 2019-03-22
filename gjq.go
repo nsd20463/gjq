@@ -58,7 +58,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	filter, err := makeFilter(args[0], 0)
+	filter, err := makeToplevelFilter(args[0])
 	if err != nil {
 		log.Printf("Can't understand filter arguments: %s\n", err)
 		os.Exit(1)
@@ -111,6 +111,41 @@ type filter interface {
 	scan(*reader, io.Writer) error
 	filter(reflect.Value, io.Writer) error
 	typeof() reflect.Type
+}
+
+// top level makeFilter call. Apart from whatever makeFilter handles, also parse
+//   X,Y   ... extract X, then Y, both at the top level
+func makeToplevelFilter(arg string) (filter, error) {
+	pieces := strings.Split(arg, ",")
+	if len(pieces) == 1 {
+		return makeFilter(arg, 0)
+	}
+
+	// OR the pieces together. each piece must be a dict
+	var f fields
+	f.fields = make(map[string]int, len(pieces))
+	f.dicts = make([]*dict, len(pieces))
+	for i := range pieces {
+		filt, err := makeFilter(pieces[i], 0)
+		if err != nil {
+			return nil, err
+		}
+		var d *dict
+		var ok bool
+		if d, ok = filt.(*dict); !ok {
+			return nil, errors.Errorf("can't OR together non-dictionary fields like %q", pieces[i])
+		}
+		f.fields[d.name] = i
+		f.dicts[i] = d
+	}
+
+	struct_fields := make([]reflect.StructField, len(f.dicts))
+	for i := range f.dicts {
+		struct_fields[i] = f.dicts[i].t.Field(0)
+	}
+	f.t = reflect.StructOf(struct_fields)
+
+	return &f, nil
 }
 
 func makeFilter(arg string, pos int) (filter, error) {
@@ -272,6 +307,57 @@ func (val *value) filter(in reflect.Value, out io.Writer) error {
 	return err
 }
 
+// a set of dict fields (X,Y)
+type fields struct {
+	fields map[string]int // map from JSON field name -> index into dicts[] and struct field index
+	dicts  []*dict
+	t      reflect.Type
+}
+
+func (f *fields) typeof() reflect.Type { return f.t }
+
+func (f *fields) filter(in reflect.Value, out io.Writer) error {
+	var err error
+
+	for i := 0; i < f.t.NumField(); i++ {
+		v := in.Field(i)
+		if f.dicts[i].f != nil {
+			return f.dicts[i].f.filter(v, out)
+		}
+
+		// we're the leaf. we print v
+		txt := []byte(fmt.Sprintf("%s\n", v.Interface()))
+		if RAW && len(txt) >= 3 && txt[0] == '"' {
+			txt = unescapeString(txt[1 : len(txt)-2])
+			txt = append(txt, '\n')
+		}
+
+		if COMPACT {
+			var b bytes.Buffer
+			err = json.Compact(&b, txt)
+			if err != nil {
+				return err
+			}
+			txt = b.Bytes()
+		}
+
+		if PRETTY {
+			var b bytes.Buffer
+			err = json.Indent(&b, txt, "", "  ")
+			if err != nil {
+				return err
+			}
+			txt = b.Bytes()
+		}
+
+		_, err = out.Write(txt)
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
 // ------------------------------------------------------------------------
 // arbitrary JSON decoder based on a custom JSON scanner which is optimized for skipping the unwanted fields
 
@@ -374,6 +460,92 @@ func (d *dict) scan(in *reader, out io.Writer) error {
 			}
 
 			// scan the value
+			if d.f != nil {
+				d.f.scan(in, out)
+			} else {
+				// print the value
+				if _, err = scanPastWhitespace(in); err != nil {
+					return err
+				}
+				in.UnreadByte()
+
+				// print the value
+				var v = d.tmp
+				if v, err = appendValue(in, v); err != nil {
+					return err
+				}
+				v = append(v, '\n')
+				d.tmp = v[:0] // save the slice for next time, since its capacity is probably right from here-on in, and we we won't have to zero it again
+
+				if RAW && len(v) >= 3 && v[0] == '"' {
+					v = unescapeString(v[1 : len(v)-2])
+					v = append(v, '\n')
+				}
+
+				if PRETTY {
+					var b bytes.Buffer
+					err = json.Indent(&b, v, "", "  ")
+					if err != nil {
+						return err
+					}
+					v = b.Bytes()
+				}
+
+				if _, err = out.Write(v); err != nil {
+					return err
+				}
+			}
+		}
+
+		if c, err = scanPastWhitespace(in); c == ',' {
+			// continue to next name:value
+		} else if c == '}' {
+			return nil
+		} else if err != nil {
+			return err
+		} else {
+			return errors.Errorf("at %d expected ',' or '}'; found %c", in.pos, c)
+		}
+	}
+}
+
+func (f *fields) scan(in *reader, out io.Writer) error {
+	// find the '{'
+	var c byte
+	var err error
+	if err = scanWhitespaceToChar(in, '{'); err != nil {
+		return err
+	}
+
+	for {
+		// find the start of a key
+		if err = scanWhitespaceToChar(in, '"'); err != nil {
+			return err
+		}
+
+		var s []byte
+		s, err = scanString(in)
+		if err != nil {
+			return err
+		}
+		n, ok := f.fields[string(s)]
+		if !ok {
+			// skip ':' and the value
+			if err = scanWhitespaceToChar(in, ':'); err != nil {
+				return err
+			}
+			if err = skipValue(in); err != nil {
+				return err
+			}
+
+		} else {
+			// we found the n'th field
+			if err = scanWhitespaceToChar(in, ':'); err != nil {
+				return err
+			}
+
+			// scan the value
+			d := f.dicts[n]
 			if d.f != nil {
 				d.f.scan(in, out)
 			} else {
