@@ -31,6 +31,7 @@ import (
 
 var RAW = false
 var PRETTY = false
+var COMPACT = false
 
 var json_rawmsg_type = reflect.TypeOf(json.RawMessage{})
 
@@ -40,6 +41,8 @@ func main() {
 	var read_buf_size = flag.Int("buf", 64*1024, "size of input I/O buffer") // experiments show >64kB buffers is, strangely, counter-productive
 	flag.BoolVar(&RAW, "r", RAW, `raw output for strings (unescape and remove "")`)
 	flag.BoolVar(&PRETTY, "pretty", PRETTY, "pretty-print output")
+	flag.BoolVar(&COMPACT, "compact", COMPACT, "compact output")
+	flag.BoolVar(&COMPACT, "c", COMPACT, "compact output")
 
 	flag.Parse()
 
@@ -280,6 +283,15 @@ func (d *dict) filter(in reflect.Value, out io.Writer) error {
 	if RAW && len(txt) >= 3 && txt[0] == '"' {
 		txt = unescapeString(txt[1 : len(txt)-2])
 		txt = append(txt, '\n')
+	}
+
+	if COMPACT {
+		var b bytes.Buffer
+		err = json.Compact(&b, txt)
+		if err != nil {
+			return err
+		}
+		txt = b.Bytes()
 	}
 
 	if PRETTY {
