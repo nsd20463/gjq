@@ -664,8 +664,10 @@ bracket_loop:
 		if len(data) != 0 && data[len(data)-1] == '{' {
 			// verify that data[:len-1] contains only whitespace and comments
 			for _, x := range data[:len(data)-1] {
-				if in_comment && x == '\n' {
-					in_comment = false
+				if in_comment {
+					if x == '\n' {
+						in_comment = false
+					}
 				} else if x == '#' {
 					in_comment = true
 				} else if !isWhitespace(x) {
