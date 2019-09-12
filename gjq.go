@@ -525,7 +525,7 @@ func (f *fields) scan(in *reader, out io.Writer) error {
 	// find the '{'
 	var c byte
 	var err error
-	if err = scanWhitespaceToChar(in, '{'); err != nil {
+	if err = scanWhitespaceOrCommentToOpenBracket(in); err != nil {
 		return err
 	}
 
@@ -837,9 +837,16 @@ func skipString(in *reader) error {
 // skip the next value
 func skipValue(in *reader) error {
 	c, err := in.ReadByte()
-	for err != nil || isWhitespace(c) {
+	in_comment := false
+	for err != nil || in_comment || isWhitespace(c) || c == '#' {
 		if err != nil {
 			return err
+		}
+		if in_comment && c == '\n' {
+			in_comment = false
+		}
+		if c == '#' {
+			in_comment = true
 		}
 		c, err = in.ReadByte()
 	}
