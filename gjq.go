@@ -442,7 +442,7 @@ func (d *dict) scan(in *reader, out io.Writer) error {
 	// find the '{'
 	var c byte
 	var err error
-	if err = scanWhitespaceToChar(in, '{'); err != nil {
+	if err = scanWhitespaceOrCommentToOpenBracket(in); err != nil {
 		return err
 	}
 
@@ -639,18 +639,53 @@ func (val *value) scan(in *reader, out io.Writer) error {
 // scan forward over whitespace until we find 'c', and stop
 func scanWhitespaceToChar(in *reader, c byte) error {
 	data, err := in.ReadSlice(c)
-	if err == nil || (len(data) != 0 && data[len(data)-1] == c) {
-		if len(data) > 1 {
-			// verify that data[:len-1] contains only whitespace
-			for _, x := range data[:len(data)-1] {
-				if !isWhitespace(x) {
-					return errors.Errorf("at %d expected '%c', found '%c'", in.pos, c, x)
-				}
+	if len(data) != 0 && data[len(data)-1] == c {
+		// verify that data[:len-1] contains only whitespace
+		for _, x := range data[:len(data)-1] {
+			if !isWhitespace(x) {
+				return errors.Errorf("at %d expected '%c', found '%c'", in.pos, c, x)
 			}
 		}
-		return nil
+		return err
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return errors.Errorf("didn't find expected '%c' at %d", c, in.pos)
+}
+
+// scan forward over whitespace until we find '{', and stop
+// skip the rest of any line once '#' is encountered
+func scanWhitespaceOrCommentToOpenBracket(in *reader) error {
+	in_comment := false
+bracket_loop:
+	for {
+		data, err := in.ReadSlice('{')
+		if len(data) != 0 && data[len(data)-1] == '{' {
+			// verify that data[:len-1] contains only whitespace and comments
+			for _, x := range data[:len(data)-1] {
+				if in_comment && x == '\n' {
+					in_comment = false
+				} else if x == '#' {
+					in_comment = true
+				} else if !isWhitespace(x) {
+					return errors.Errorf("at %d expected '{', found '%c'", in.pos, x)
+				}
+			}
+			if in_comment {
+				// the { we found is part of a comment; get another chunk of input to process
+				if err == nil {
+					continue bracket_loop
+				}
+				return err
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return errors.Errorf("didn't find expected '{' at %d", in.pos)
+	}
 }
 
 // scan forward over whitespace; return the first non-whitespace char
@@ -916,9 +951,16 @@ func skipValue(in *reader) error {
 // scan and return the next value
 func appendValue(in *reader, value []byte) ([]byte, error) {
 	c, err := in.ReadByte()
-	for err != nil || isWhitespace(c) {
+	in_comment := false
+	for err != nil || in_comment || isWhitespace(c) || c == '#' {
 		if err != nil {
 			return value, err
+		}
+		if in_comment && c == '\n' {
+			in_comment = false
+		}
+		if c == '#' {
+			in_comment = true
 		}
 		c, err = in.ReadByte()
 	}
