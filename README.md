@@ -1,7 +1,8 @@
 # gjq
-simple jq-like program with performance rather than completeness as the goal
 
-It only implements what I need, which at the moment is simply extracting a field from a series of messages.
+gjq is a simple jq-like program with performance rather than completeness as the goal.
+
+It only implements what I've needed, which at the moment is extracting a field from a series of messages.
 For example:
 
     $ echo '[ {"x":1}, {"x":2}, {"x":3} ]' | gjq '.[].x'
@@ -40,3 +41,9 @@ Another performance comparison, 8x in this case, which consists of outputting ev
     sys     0m0.848s
 
 Note passing jq the -c flag helps it. Without -c the jq time is 2m29s.
+
+
+gjq supports comments in JSON. Comments start with a # symbol and extend to the
+end of the line. Comments aren't part of the JSON standard, of course, but they
+are darn useful never-the-less.
+
