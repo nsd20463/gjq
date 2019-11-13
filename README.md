@@ -29,7 +29,7 @@ The output contains 171k elements.
 
 
 Another performance comparison, 8x in this case, which consists of outputting everything in compacted form
-(compacted is the default for gjq since it's better for performance; use jgq -pretty for formatted output):
+(compacted is the default for gjq since it's better for performance; use gjq -pretty for formatted output):
 
     $ time gjq '.' <100k_json_records.json >/dev/null
     real    0m14.569s
