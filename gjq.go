@@ -941,7 +941,7 @@ func skipValue(in *reader) error {
 			} // if it's a ErrBufferFull or EOF then buf is truncated and we want to process what we have peeked
 			for i, c := range buf {
 				switch {
-				case 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == 'E', c == '+', c == '-', c == '.': // keywords (true, false, null) are in lowercase ascii; no need to handle UTF-8. I do need to allow 'E' for the float format, since JSON allows both e and E
+				case 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == 'E', c == 'N', c == 'I', c == '+', c == '-', c == '.': // keywords (true, false, null) are in lowercase ascii; no need to handle UTF-8. I do need to allow 'E' for the float format, since JSON allows both e and E. 'N' is include to allow NaN, and 'I' for Inf, which aren't legal JSON, but can appear due to bugs in some JSON marshalers
 				default:
 					// stop here
 					_, err := in.Discard(i) // we know the discard succeeds b/c we just Peek()ed at least as much
@@ -1070,7 +1070,7 @@ func appendValue(in *reader, value []byte) ([]byte, error) {
 			} // if it's a ErrBufferFull or EOF then buf is truncated and we want to process what we have peeked
 			for i, c := range buf {
 				switch {
-				case 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == 'E', c == '+', c == '-', c == '.': // keywords (true, false, null) are in lowercase ascii; no need to handle UTF-8. I do need to allow 'E' for the float format, since JSON allows both e and E
+				case 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == 'E', c == 'N', c == 'I', c == '+', c == '-', c == '.': // keywords (true, false, null) are in lowercase ascii; no need to handle UTF-8. I do need to allow 'E' for the float format, since JSON allows both e and E. 'N' is include to allow NaN, and 'I' for Inf, which aren't legal JSON, but can appear due to bugs in some JSON marshalers
 				default:
 					// stop here
 					value = append(value, buf[:i]...)
