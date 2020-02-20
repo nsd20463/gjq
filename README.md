@@ -2,7 +2,7 @@
 
 gjq is a simple jq-like program with performance rather than completeness as the goal.
 
-It only implements what I've needed, which at the moment is extracting a field from a series of messages.
+It only implements what I've needed, which at the moment is extracting fields from a series of messages.
 For example:
 
     $ echo '[ {"x":1}, {"x":2}, {"x":3} ]' | gjq '.[].x'
@@ -43,7 +43,15 @@ Another performance comparison, 8x in this case, which consists of outputting ev
 Note passing jq the -c flag helps it. Without -c the jq time is 2m29s.
 
 
+Multiple fields can be extracted in one pass. Separate them with ,
+
+  gjq .X,.Y
+
+
 gjq supports comments in JSON. Comments start with a # symbol and extend to the
 end of the line. Comments aren't part of the JSON standard, of course, but they
 are darn useful never-the-less.
 
+gjq allows the numeric values 'NaN', 'Inf', '+Inf" and '-Inf'. These are not
+part of the JSON standard, but some JSON contains them anyway due to how the
+encoder was written.
